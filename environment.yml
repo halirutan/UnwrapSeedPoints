@@ -1,0 +1,8 @@
+name: UnwrapSeedPoints
+channels:
+  - conda-forge
+dependencies:
+  - nibabel>=5.2.1
+  - numpy>=1.26.4
+  - pip>=24.0
+  - python>=3.11.8
