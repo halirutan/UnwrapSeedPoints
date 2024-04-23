@@ -28,6 +28,12 @@ def load_nifti(filename: str) -> nib.Nifti1Image:
 
 
 def phase_jumps_by_generic_filter(data: np.ndarray) -> np.ndarray:
+    """
+    Estimates phase jumps by checking a small region around a voxel for having both values close to -pi and pi.
+
+    This implementation is really slow and won't be used.
+    Instead, we use the approximation you see below in the correlation filter.
+    """
     filtered = generic_filter(
         data,
         lambda x: np.int32(np.max(x) > 0.9 * np.pi and np.min(x) < -0.9 * np.pi),
@@ -39,6 +45,11 @@ def phase_jumps_by_generic_filter(data: np.ndarray) -> np.ndarray:
 
 
 def phase_jumps_by_correlation(data: np.ndarray) -> np.ndarray:
+    """
+    Uses a simple star-like kernel to estimate the phase jumps around a voxel with correlation.
+    :param data: voxel matrix of the 3D image.
+    :return: An image, where phase jumps are dark and smooth, edge-free regions are bright.
+    """
     logger.info("Calculate phase jumps by correlation")
     kernel = [[[0, -1, 0], [-1, 0, 1], [0, 1, 0]]]
     filtered = np.abs(ndimage.correlate(data, weights=kernel))
@@ -46,8 +57,19 @@ def phase_jumps_by_correlation(data: np.ndarray) -> np.ndarray:
     return 1 - np.int32(np.logical_or(filtered > threshold, data == 0.0))
 
 
-def seed_points_by_distance_transform(data: np.ndarray, num_seed_points: int) -> tuple[
-    np.ndarray, np.ndarray, np.ndarray]:
+def seed_points_by_distance_transform(data: np.ndarray, num_seed_points: int) -> (
+        tuple)[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Calculates seed-points based on distance transform.
+
+    It uses the output of `phase_jumps_by_correlation` and creates a distance transform image.
+    Then it applies a high threshold based on the distance image to get a mask where seed points should be located.
+    Finally, it chooses `num_seed_points` from these regions.
+    :param data: phase wrap indicator image
+    :param num_seed_points: positive integer
+    :return: tuple consisting of: image of the distance transform,
+    image with seed-points, and seed-points as a numpy array.
+    """
     logger.info("Calculate distance transform")
     distance_transform = distance_transform_cdt(data)
     logger.info("Calculate seed points")
@@ -74,7 +96,40 @@ class CmdOptions:
     """Number of seed points to create"""
 
 
-def main():
+def find_seed_points(input_file: str, result_dir: str, n: int) -> None:
+    img = load_nifti(input_file)
+    phase_jumps = phase_jumps_by_correlation(img.get_fdata())
+    distance_transform, seed_points_image, seed_points_coordinates = seed_points_by_distance_transform(
+        phase_jumps, n)
+    # Increase the size of the seed points in the image for better visibility
+    logger.info("Increasing the size of seed points in the image for better visualization")
+    seed_points_image = morphology.dilation(seed_points_image, footprint=morphology.ball(3))
+    logger.info("Saving distance transform image")
+    nib.save(nib.Nifti1Image(
+        distance_transform,
+        img.affine,
+        img.header),
+        os.path.join(result_dir, "distance_transform.nii"))
+    logger.info("Saving seed points image")
+    nib.save(nib.Nifti1Image(
+        seed_points_image,
+        img.affine,
+        img.header),
+        os.path.join(result_dir, "seed_points.nii"))
+
+    logger.info("Saving thresholded distance transform image")
+    thresh = np.quantile(distance_transform, 0.99)
+    nib.save(nib.Nifti1Image(
+        np.int32(distance_transform > thresh),
+        img.affine,
+        img.header),
+        os.path.join("distance_transform_threshold.nii"))
+
+    logger.info("Saving seed point coordinates")
+    np.savetxt(os.path.join(result_dir, "seed_points_coordinates.txt"), seed_points_coordinates, fmt="%d")
+
+
+if __name__ == '__main__':
     logger.setLevel(logging.INFO)
     parser = ArgumentParser()
     # noinspection PyTypeChecker
@@ -95,38 +150,4 @@ def main():
     if num_seed_points <= 0:
         logger.error("Number of seed points must be a positive integer")
         exit(1)
-
-    img = load_nifti(nifti_file)
-    phase_jumps = phase_jumps_by_correlation(img.get_fdata())
-    distance_transform, seed_points_image, seed_points_coordinates = seed_points_by_distance_transform(
-        phase_jumps, num_seed_points)
-    # Increase the size of the seed points in the image for better visibility
-    logger.info("Increasing the size of seed points in the image for better visualization")
-    seed_points_image = morphology.dilation(seed_points_image, footprint=morphology.ball(3))
-    logger.info("Saving distance transform image")
-    nib.save(nib.Nifti1Image(
-        distance_transform,
-        img.affine,
-        img.header),
-        os.path.join(output_dir, "distance_transform.nii"))
-    logger.info("Saving seed points image")
-    nib.save(nib.Nifti1Image(
-        seed_points_image,
-        img.affine,
-        img.header),
-        os.path.join(output_dir, "seed_points.nii"))
-
-    logger.info("Saving thresholded distance transform image")
-    thresh = np.quantile(distance_transform, 0.99)
-    nib.save(nib.Nifti1Image(
-        np.int32(distance_transform > thresh),
-        img.affine,
-        img.header),
-        os.path.join("distance_transform_threshold.nii"))
-
-    logger.info("Saving seed point coordinates")
-    np.savetxt(os.path.join(output_dir, "seed_points_coordinates.txt"), seed_points_coordinates, fmt="%d")
-
-
-if __name__ == '__main__':
-    main()
+    find_seed_points(nifti_file, output_dir, num_seed_points)
