@@ -91,7 +91,7 @@ class CmdOptions:
     input: str
     """Input phase map Nifti file"""
     output_dir: str
-    """Output directory files"""
+    """Output directory for created files"""
     n: int
     """Number of seed points to create"""
 
